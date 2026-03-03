@@ -8,23 +8,42 @@ from telegram.ext import (
     ContextTypes,
 )
 
-TOKEN = "7830152931:AAGe1xmx1BW_q9eIld3mDlg0eOBiziKmPmY"  # або встав токен прямо
+TOKEN = "7830152931:AAGe1xmx1BW_q9eIld3mDlg0eOBiziKmPmY"  # або встав токен
 
-# зберігаємо активні задачі
+# -------- GLOBAL STATE --------
+session: aiohttp.ClientSession | None = None
 active_tasks = {}
 
 
-# --- Binance price ---
+# -------- INIT / SHUTDOWN --------
+async def post_init(application):
+    """Створюємо одну HTTP session для всього бота"""
+    global session
+    session = aiohttp.ClientSession()
+
+    # прибирає 409 conflict після деплою
+    await application.bot.delete_webhook(drop_pending_updates=True)
+
+
+async def post_shutdown(application):
+    """Закриваємо session при зупинці"""
+    global session
+    if session:
+        await session.close()
+
+
+# -------- BINANCE PRICE --------
 async def get_price():
+    global session
+
     url = "https://api.binance.com/api/v3/ticker/price?symbol=BONKUSDT"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            data = await response.json()
-            return float(data["price"])
+    async with session.get(url, timeout=10) as response:
+        data = await response.json()
+        return float(data["price"])
 
 
-# --- START ---
+# -------- COMMANDS --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привіт!\n"
@@ -33,34 +52,40 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# --- LIVE PRICE LOOP ---
+# -------- LIVE TRACKER --------
 async def price_tracker(chat_id, message_id, context):
+    last_text = None
+
     while True:
         try:
             price = await get_price()
 
             text = f"💰 BONK/USDT\n\nЦіна: {price}"
 
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-            )
+            # редагуємо тільки якщо змінилось
+            if text != last_text:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                )
+                last_text = text
 
             await asyncio.sleep(5)
 
         except asyncio.CancelledError:
+            print("Tracker stopped")
             break
+
         except Exception as e:
-            print("Error:", e)
+            print("Tracker error:", e)
             await asyncio.sleep(5)
 
 
-# --- /groshi ---
+# -------- /groshi --------
 async def groshi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # якщо вже працює — не запускаємо другий раз
     if chat_id in active_tasks:
         await update.message.reply_text("⚠️ Вже запущено")
         return
@@ -74,7 +99,7 @@ async def groshi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_tasks[chat_id] = task
 
 
-# --- /stop ---
+# -------- /stop --------
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
@@ -85,12 +110,18 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del active_tasks[chat_id]
         await update.message.reply_text("🛑 Оновлення зупинено")
     else:
-        await update.message.reply_text("Нічого зупиняти 🙂")
+        await update.message.reply_text("Немає активного трекера")
 
 
-# --- MAIN ---
+# -------- MAIN --------
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("groshi", groshi))
