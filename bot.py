@@ -114,7 +114,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------- MAIN --------
-def main():
+async def main():
     app = (
         ApplicationBuilder()
         .token(TOKEN)
@@ -127,9 +127,17 @@ def main():
     app.add_handler(CommandHandler("groshi", groshi))
     app.add_handler(CommandHandler("stop", stop))
 
+    # 🔥 VERY IMPORTANT
+    await app.initialize()
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    await app.start()
+
     print("Bot started...")
-    app.run_polling()
+
+    await app.updater.start_polling(drop_pending_updates=True)
+
+    await app.updater.idle()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
